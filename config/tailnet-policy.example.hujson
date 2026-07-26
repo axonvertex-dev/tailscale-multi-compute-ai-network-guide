@@ -1,0 +1,106 @@
+// TEMPLATE ONLY.
+// Replace example identities, local usernames, tags, and ports.
+// Review and test before applying to a live tailnet.
+{
+  "groups": {
+    "group:ai-admins": [
+      "krishdasgupta.official@gmail.com"
+    ],
+    "group:ai-operators": [
+      "krishdasgupta.official@gmail.com"
+    ],
+    "group:ai-users": [
+      "krishdasgupta.official@gmail.com"
+    ]
+  },
+
+  "tagOwners": {
+    "tag:ai-gateway": ["group:ai-admins"],
+    "tag:gpu-model-server": ["group:ai-admins"],
+    "tag:edge-model-server": ["group:ai-admins"],
+    "tag:observability": ["group:ai-admins"]
+  },
+
+  "grants": [
+    // Operators call only the central gateway.
+    {
+      "src": ["group:ai-users", "group:ai-operators"],
+      "dst": ["tag:ai-gateway"],
+      "ip": ["tcp:18180"]
+    },
+
+    // Gateway reaches model APIs.
+    {
+      "src": ["tag:ai-gateway"],
+      "dst": ["tag:gpu-model-server"],
+      "ip": ["tcp:18181", "tcp:11434"]
+    },
+    {
+      "src": ["tag:ai-gateway"],
+      "dst": ["tag:edge-model-server"],
+      "ip": ["tcp:18181", "tcp:18182", "tcp:11434"]
+    },
+
+    // Administrators reach SSH and service health endpoints.
+    {
+      "src": ["group:ai-admins"],
+      "dst": [
+        "tag:ai-gateway",
+        "tag:gpu-model-server",
+        "tag:edge-model-server",
+        "tag:observability"
+      ],
+      "ip": [
+        "tcp:22",
+        "tcp:18180",
+        "tcp:18181",
+        "tcp:18182",
+        "tcp:11434",
+        "tcp:3000",
+        "tcp:9090"
+      ]
+    },
+
+    // Observability can scrape approved metrics endpoints.
+    {
+      "src": ["tag:observability"],
+      "dst": [
+        "tag:ai-gateway",
+        "tag:gpu-model-server",
+        "tag:edge-model-server"
+      ],
+      "ip": ["tcp:9100", "tcp:18190"]
+    }
+  ],
+
+  "ssh": [
+    // Replace ubuntu and axonvertex with real local accounts.
+    {
+      "action": "check",
+      "checkPeriod": "12h",
+      "src": ["group:ai-admins"],
+      "dst": [
+        "tag:ai-gateway",
+        "tag:gpu-model-server",
+        "tag:edge-model-server",
+        "tag:observability"
+      ],
+      "users": ["ubuntu", "axonvertex"]
+    },
+    {
+      "action": "check",
+      "checkPeriod": "1h",
+      "src": ["group:ai-admins"],
+      "dst": ["tag:gpu-model-server", "tag:edge-model-server"],
+      "users": ["root"]
+    }
+  ],
+
+  // Add policy tests specific to the identities used in the live tailnet.
+  "tests": [
+    {
+      "src": "krishdasgupta.official@gmail.com",
+      "accept": ["tag:ai-gateway:18180"]
+    }
+  ]
+}

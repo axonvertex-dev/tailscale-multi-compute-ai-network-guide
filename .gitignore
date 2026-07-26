@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+config/models.yaml
+*.log
+diagnostics/
+.DS_Store
+.vscode/
+.idea/

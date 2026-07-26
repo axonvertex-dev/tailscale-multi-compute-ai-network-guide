@@ -1,0 +1,68 @@
+# Copy to config/models.yaml and replace model identifiers as needed.
+# Hostnames are MagicDNS names from the example tailnet.
+
+backends:
+  gpu-primary:
+    provider: openai
+    base_url: http://axonvertex-01:18181
+    health_path: /v1/models
+    capabilities:
+      - security
+      - reasoning
+      - code
+      - long-context
+    metadata:
+      compute_class: primary-gpu
+      tailscale_ip: 100.82.103.57
+
+  gpu-secondary:
+    provider: ollama
+    base_url: http://axonvertex-personal-01:11434
+    health_path: /api/tags
+    capabilities:
+      - general
+      - lightweight
+      - fallback
+      - code
+    metadata:
+      compute_class: edge-gpu
+      tailscale_ip: 100.99.149.21
+
+  mac-mlx:
+    provider: openai
+    base_url: http://rentorzos-macbook-pro-2:18181
+    health_path: /v1/models
+    capabilities:
+      - general
+      - mlx
+      - multimodal
+    metadata:
+      compute_class: apple-unified-memory
+      tailscale_ip: 100.76.212.84
+
+profiles:
+  security:
+    candidates:
+      - backend: gpu-primary
+        model: foundation-sec
+      - backend: gpu-secondary
+        model: qwen3:3b
+
+  general:
+    candidates:
+      - backend: mac-mlx
+        model: gemma-local
+      - backend: gpu-secondary
+        model: qwen3:3b
+
+  lightweight:
+    candidates:
+      - backend: gpu-secondary
+        model: qwen3:3b
+
+  multimodal:
+    candidates:
+      - backend: mac-mlx
+        model: medgemma-local
+
+default_profile: general
