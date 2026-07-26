@@ -1,7 +1,8 @@
 [Unit]
 Description=Tailscale Multi-Compute Model Router
-After=network-online.target tailscale-online.target
-Wants=network-online.target tailscale-online.target
+After=network-online.target tailscaled.service
+Wants=network-online.target
+Requires=tailscaled.service
 
 [Service]
 Type=simple
@@ -9,14 +10,22 @@ User=ai-router
 Group=ai-router
 WorkingDirectory=/opt/tailscale-ai-guide
 EnvironmentFile=/etc/tailscale-ai-router.env
-ExecStart=/opt/tailscale-ai-guide/.venv/bin/uvicorn router.model_router:app --host 0.0.0.0 --port 18180
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/tailscale-ai-guide/scripts/linux/run-model-router.sh
 Restart=on-failure
 RestartSec=5
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/tailscale-ai-router
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

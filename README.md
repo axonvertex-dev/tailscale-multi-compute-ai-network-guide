@@ -2,6 +2,10 @@
 
 A practical repository for connecting Linux GPU servers, macOS workstations, and Windows systems using WSL to one private Tailscale network, then using that network for SSH administration and private AI model routing.
 
+## Scope
+
+This repository configures Tailscale connectivity, SSH access, access policy, endpoint verification, and a reference model router. It does not install Ollama, MLX, vLLM, model weights, or other inference runtimes. Install and verify the required model servers on their respective compute nodes before expecting routed inference to work.
+
 The repository is based on the same operating pattern used in a multi-node AI SRE environment:
 
 - One identity-backed private network, called a **tailnet**.
@@ -58,7 +62,8 @@ tailscale-multi-compute-ai-network-guide/
 │   ├── 08-TROUBLESHOOTING.md
 │   ├── 09-OPERATIONS-RUNBOOK.md
 │   ├── 10-OFFICIAL-REFERENCES.md
-│   └── 11-PUBLISH-TO-GITHUB.md
+│   ├── 11-PUBLISH-TO-GITHUB.md
+│   └── 12-LINUX-MODEL-ROUTER-SERVICE.md
 ├── router/
 │   ├── README.md
 │   ├── model_router.py
@@ -69,6 +74,8 @@ tailscale-multi-compute-ai-network-guide/
     ├── test-model-endpoints.sh
     ├── linux/install-tailscale.sh
     ├── linux/configure-ollama-tailnet.sh
+    ├── linux/run-model-router.sh
+    ├── linux/install-model-router-service.sh
     ├── macos/check-tailscale.sh
     └── wsl/check-wsl-connectivity.sh
 ```
@@ -86,7 +93,8 @@ tailscale-multi-compute-ai-network-guide/
 6. [Security hardening](docs/07-SECURITY-HARDENING.md)
 7. [Troubleshooting](docs/08-TROUBLESHOOTING.md)
 8. [Operations runbook](docs/09-OPERATIONS-RUNBOOK.md)
-9. [Publish the repository to GitHub](docs/11-PUBLISH-TO-GITHUB.md)
+9. [Install the Linux model-router service](docs/12-LINUX-MODEL-ROUTER-SERVICE.md)
+10. [Publish the repository to GitHub](docs/11-PUBLISH-TO-GITHUB.md)
 
 ## Fast path
 
@@ -156,12 +164,17 @@ source .venv/bin/activate
 pip install -r router/requirements.txt
 
 cp config/models.example.yaml config/models.yaml
-cp config/model-router.env.example .env
 
 export MODEL_ROUTER_CONFIG="$PWD/config/models.yaml"
-export ROUTER_API_KEY='replace-with-a-long-random-secret'
-uvicorn router.model_router:app --host 0.0.0.0 --port 18180
+export ROUTER_API_KEY="$(openssl rand -hex 32)"
+export MODEL_ROUTER_HOST="$(tailscale ip -4 | head -n 1)"
+
+make run
 ```
+
+The router fails closed when `ROUTER_API_KEY` is missing. It binds to the Tailscale IPv4 address rather than every network interface.
+
+For a persistent Linux service, follow [Linux model-router service installation](docs/12-LINUX-MODEL-ROUTER-SERVICE.md).
 
 From another permitted tailnet device:
 

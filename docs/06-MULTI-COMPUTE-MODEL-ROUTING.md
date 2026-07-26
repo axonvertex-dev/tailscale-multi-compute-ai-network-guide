@@ -129,22 +129,24 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r router/requirements.txt
 
+cp config/models.example.yaml config/models.yaml
 export MODEL_ROUTER_CONFIG="$PWD/config/models.yaml"
 export ROUTER_API_KEY="$(openssl rand -hex 32)"
 export ROUTER_REQUEST_TIMEOUT_SECONDS=120
+export MODEL_ROUTER_HOST="$(tailscale ip -4 | head -n 1)"
 
-uvicorn router.model_router:app \
-  --host 0.0.0.0 \
-  --port 18180
+make run
 ```
 
-On a multi-interface machine, prefer the Tailscale IP:
+The router requires `ROUTER_API_KEY` by default and listens on the Tailscale IPv4 address. To start Uvicorn directly:
 
 ```bash
 uvicorn router.model_router:app \
-  --host "$(tailscale ip -4)" \
+  --host "$(tailscale ip -4 | head -n 1)" \
   --port 18180
 ```
+
+For a persistent Linux service, use `sudo bash scripts/linux/install-model-router-service.sh` after editing `config/models.yaml`.
 
 ## 7. Check router health
 
@@ -153,7 +155,7 @@ curl -fsS http://127.0.0.1:18180/health \
   -H "Authorization: Bearer $ROUTER_API_KEY" | jq
 ```
 
-The response reports router health and backend application health. A backend can be visible in `tailscale status` yet fail its application health check.
+The response reports router health and backend application health. It returns `healthy` when all backends are available, `degraded` when at least one backend is available, and HTTP `503` with `unavailable` when every backend is down. A backend can be visible in `tailscale status` yet fail its application health check.
 
 ## 8. Send a routed request
 
@@ -255,7 +257,7 @@ Example decision order:
 7. Use the highest-priority remaining candidate.
 ```
 
-The included router implements static profiles, capability filtering, health-aware fallback, and preferred-backend testing. A production router can add GPU metrics and queue-aware scoring.
+The included router implements static profiles, capability filtering, health-aware fallback, preferred-backend testing, malformed-JSON handling, and fail-closed authentication. It is intentionally non-streaming. A production router can add streaming, GPU metrics, queue-aware scoring, workload identity, and persistent audit storage.
 
 ## 14. Environment variables for applications
 

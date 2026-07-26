@@ -9,10 +9,14 @@ This is a reference implementation, not a complete production gateway.
 
 from __future__ import annotations
 
+import hmac
+import json
 import logging
 import os
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +26,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 CONFIG_PATH = Path(os.getenv("MODEL_ROUTER_CONFIG", "config/models.yaml"))
-API_KEY = os.getenv("ROUTER_API_KEY", "")
+API_KEY = os.getenv("ROUTER_API_KEY")
+ALLOW_INSECURE_NO_AUTH = os.getenv("ALLOW_INSECURE_NO_AUTH", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 REQUEST_TIMEOUT = float(os.getenv("ROUTER_REQUEST_TIMEOUT_SECONDS", "120"))
 HEALTH_TIMEOUT = float(os.getenv("ROUTER_HEALTH_TIMEOUT_SECONDS", "5"))
 LOG_LEVEL = os.getenv("ROUTER_LOG_LEVEL", "INFO").upper()
@@ -33,9 +42,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger("model-router")
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    if not API_KEY and not ALLOW_INSECURE_NO_AUTH:
+        raise RuntimeError(
+            "ROUTER_API_KEY is required. Set ALLOW_INSECURE_NO_AUTH=true only "
+            "for an isolated development environment."
+        )
+    if not API_KEY:
+        logger.warning("Router authentication is disabled by explicit configuration")
+
+    load_config()
+    yield
+
+
 app = FastAPI(
     title="Tailscale Multi-Compute Model Router",
-    version="1.0.0",
+    version="1.0.1",
+    lifespan=lifespan,
 )
 
 
@@ -49,21 +74,28 @@ def load_config() -> dict[str, Any]:
     with CONFIG_PATH.open("r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle) or {}
 
-    if not isinstance(config.get("backends"), dict):
-        raise RuntimeError("Configuration requires a 'backends' mapping.")
-    if not isinstance(config.get("profiles"), dict):
-        raise RuntimeError("Configuration requires a 'profiles' mapping.")
+    if not isinstance(config.get("backends"), dict) or not config["backends"]:
+        raise RuntimeError("Configuration requires a non-empty 'backends' mapping.")
+    if not isinstance(config.get("profiles"), dict) or not config["profiles"]:
+        raise RuntimeError("Configuration requires a non-empty 'profiles' mapping.")
 
     return config
 
 
 def require_api_key(request: Request) -> None:
     if not API_KEY:
-        return
+        if ALLOW_INSECURE_NO_AUTH:
+            return
+        raise HTTPException(status_code=503, detail="Router authentication is not configured")
+
     supplied = request.headers.get("authorization", "")
     expected = f"Bearer {API_KEY}"
-    if supplied != expected:
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token")
+    if not hmac.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def backend_url(backend: dict[str, Any], path: str) -> str:
@@ -194,7 +226,14 @@ async def forward_ollama(
             content=_safe_json(response),
         )
 
-    body = response.json()
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Ollama backend returned an invalid JSON response",
+        ) from exc
+
     message = body.get("message", {})
     usage = {
         "prompt_tokens": body.get("prompt_eval_count", 0),
@@ -240,7 +279,7 @@ async def root(request: Request) -> dict[str, Any]:
 
 
 @app.get("/health")
-async def health(request: Request) -> dict[str, Any]:
+async def health(request: Request) -> JSONResponse:
     require_api_key(request)
     config = load_config()
     async with httpx.AsyncClient() as client:
@@ -249,11 +288,27 @@ async def health(request: Request) -> dict[str, Any]:
             for name, backend in config["backends"].items()
         ]
 
-    return {
-        "router": "healthy",
-        "config": str(CONFIG_PATH),
-        "backends": results,
-    }
+    healthy_count = sum(1 for result in results if result["healthy"])
+    if healthy_count == len(results):
+        router_status = "healthy"
+        status_code = 200
+    elif healthy_count > 0:
+        router_status = "degraded"
+        status_code = 200
+    else:
+        router_status = "unavailable"
+        status_code = 503
+
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "router": router_status,
+            "healthy_backends": healthy_count,
+            "total_backends": len(results),
+            "config": str(CONFIG_PATH),
+            "backends": results,
+        },
+    )
 
 
 @app.get("/v1/models")
@@ -276,11 +331,20 @@ async def models(request: Request) -> dict[str, Any]:
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> JSONResponse:
     require_api_key(request)
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Malformed JSON request body") from exc
+
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if not isinstance(payload.get("messages"), list):
         raise HTTPException(status_code=400, detail="'messages' must be a list")
+    if payload.get("stream") is True:
+        raise HTTPException(
+            status_code=400,
+            detail="Streaming is not supported by this reference router.",
+        )
 
     config = load_config()
     routing = payload.pop("routing", {}) or {}
@@ -290,8 +354,13 @@ async def chat_completions(request: Request) -> JSONResponse:
     profile_name = routing.get("profile") or config.get("default_profile", "general")
     preferred_backend = routing.get("preferred_backend")
     required_capabilities = routing.get("required_capabilities", []) or []
-    if not isinstance(required_capabilities, list):
-        raise HTTPException(status_code=400, detail="required_capabilities must be a list")
+    if not isinstance(required_capabilities, list) or not all(
+        isinstance(item, str) for item in required_capabilities
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="required_capabilities must be a list of strings",
+        )
 
     candidates = select_candidates(
         config=config,
